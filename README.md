@@ -368,15 +368,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 📞 Support
-
-- 📧 **Email**: support@yourapp.com
-- 💬 **Discord**: [Join our community](https://discord.gg/yourserver)
-- 📖 **Documentation**: [docs.yourapp.com](https://docs.yourapp.com)
-- 🐛 **Issues**: [GitHub Issues](https://github.com/yourusername/your-repo/issues)
-
----
-
 <div align="center">
   <p>Made with ❤️ for Hackathon Elevate 2025</p>
   <p>
