@@ -48,12 +48,18 @@ import {
   Newspaper,
   Eye,
   EyeOff,
+<<<<<<< HEAD
   Airplay,
   LucideIcon
 } from "lucide-react"
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts"
 import Link from "next/link"
 import Image from "next/image"
+=======
+} from "lucide-react"
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts"
+import Link from "next/link"
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
 import { useState } from "react"
 
 // Mock data for charts
@@ -92,7 +98,11 @@ const newsArticles = [
     title: "Optimizing Rice Irrigation in Dry Season",
     category: "Tanaman",
     excerpt: "Learn effective water management techniques for rice cultivation during drought periods.",
+<<<<<<< HEAD
     image: "/drought.png",
+=======
+    image: "/placeholder.svg?height=100&width=150",
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
     readTime: "5 min read",
   },
   {
@@ -100,7 +110,11 @@ const newsArticles = [
     title: "Weather Patterns and Crop Planning",
     category: "Cuaca",
     excerpt: "Understanding seasonal weather changes for better agricultural planning and decision making.",
+<<<<<<< HEAD
     image: "/weather.png",
+=======
+    image: "/placeholder.svg?height=100&width=150",
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
     readTime: "7 min read",
   },
   {
@@ -108,7 +122,11 @@ const newsArticles = [
     title: "Soil Health Management Techniques",
     category: "Tanah",
     excerpt: "Essential practices for maintaining soil fertility and improving crop yields sustainably.",
+<<<<<<< HEAD
     image: "/soil.png",
+=======
+    image: "/placeholder.svg?height=100&width=150",
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
     readTime: "6 min read",
   },
   {
@@ -116,7 +134,11 @@ const newsArticles = [
     title: "Integrated Pest Management Strategies",
     category: "Hama",
     excerpt: "Effective approaches to control pests while minimizing environmental impact on farms.",
+<<<<<<< HEAD
     image: "/pest.png",
+=======
+    image: "/placeholder.svg?height=100&width=150",
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
     readTime: "8 min read",
   },
 ]
@@ -133,6 +155,7 @@ export default function Dashboard() {
 
   // Sensor data
   const sensorData = {
+<<<<<<< HEAD
     temperature: { value: 32.1, unit: "°C", color: "text-blue-600", bgColor: "bg-blue-50", icon: Thermometer },
     humidity: { value: 64.7, unit: "RH", color: "text-green-600", bgColor: "bg-green-50", icon: Droplets },
     light: { value: 12780, unit: "Lux", color: "text-orange-600", bgColor: "bg-orange-50", icon: Sun },
@@ -140,6 +163,15 @@ export default function Dashboard() {
     solarVoltage: { value: 2.09, unit: "mV", color: "text-orange-600", bgColor: "bg-orange-50", icon: Gauge },
     solarWatt: { value: 0.9, unit: "mW", color: "text-orange-600", bgColor: "bg-orange-50", icon: Zap },
     wind: { value: 1.4, unit: "Knot", color: "text-green-600", bgColor: "bg-green-50", icon: Wind },
+=======
+    temperature: { value: 35.1, unit: "°C", color: "text-blue-600", bgColor: "bg-blue-50", icon: Thermometer },
+    humidity: { value: 57.7, unit: "RH", color: "text-green-600", bgColor: "bg-green-50", icon: Droplets },
+    light: { value: 44.17, unit: "Lux", color: "text-orange-600", bgColor: "bg-orange-50", icon: Sun },
+    solarCurrent: { value: -0.2, unit: "mA", color: "text-green-600", bgColor: "bg-green-50", icon: Zap },
+    solarVoltage: { value: 1.09, unit: "mV", color: "text-orange-600", bgColor: "bg-orange-50", icon: Gauge },
+    solarWatt: { value: 0, unit: "mW", color: "text-orange-600", bgColor: "bg-orange-50", icon: Zap },
+    wind: { value: 0, unit: "Knot", color: "text-green-600", bgColor: "bg-green-50", icon: Wind },
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
     rain: { value: 0, unit: "mm", color: "text-blue-600", bgColor: "bg-blue-50", icon: CloudRain },
   }
 
@@ -164,7 +196,11 @@ export default function Dashboard() {
     title: string
     value: number
     unit: string
+<<<<<<< HEAD
     icon: LucideIcon
+=======
+    icon: any
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
     color: string
     bgColor: string
   }) => (
@@ -211,6 +247,7 @@ export default function Dashboard() {
                       Dashboard
                     </SidebarMenuButton>
                   </SidebarMenuItem>
+<<<<<<< HEAD
                   <SidebarMenuItem>
                     <Link
                       href="/drone-detection"
@@ -220,6 +257,8 @@ export default function Dashboard() {
                       Drone Detection
                     </Link>
                   </SidebarMenuItem>
+=======
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
@@ -234,7 +273,11 @@ export default function Dashboard() {
                       isActive={selectedStation === "wisnu"}
                     >
                       <MapPin className="w-4 h-4" />
+<<<<<<< HEAD
                       Stasiun Test 1
+=======
+                      wisnu
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                   <SidebarMenuItem>
@@ -323,7 +366,11 @@ export default function Dashboard() {
                 {/* Sensor Data Cards */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <SensorCard
+<<<<<<< HEAD
                     title="Temperatur"
+=======
+                    title="Temperature"
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
                     value={sensorData.temperature.value}
                     unit={sensorData.temperature.unit}
                     icon={sensorData.temperature.icon}
@@ -355,7 +402,11 @@ export default function Dashboard() {
                     bgColor={sensorData.solarCurrent.bgColor}
                   />
                   <SensorCard
+<<<<<<< HEAD
                     title="Tegangan Solar Cell"
+=======
+                    title="Tegangan Solar"
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
                     value={sensorData.solarVoltage.value}
                     unit={sensorData.solarVoltage.unit}
                     icon={sensorData.solarVoltage.icon}
@@ -371,7 +422,11 @@ export default function Dashboard() {
                     bgColor={sensorData.solarWatt.bgColor}
                   />
                   <SensorCard
+<<<<<<< HEAD
                     title="Angin"
+=======
+                    title="Wind"
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
                     value={sensorData.wind.value}
                     unit={sensorData.wind.unit}
                     icon={sensorData.wind.icon}
@@ -379,7 +434,11 @@ export default function Dashboard() {
                     bgColor={sensorData.wind.bgColor}
                   />
                   <SensorCard
+<<<<<<< HEAD
                     title="Curah Hujan"
+=======
+                    title="Rain Gauge"
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
                     value={sensorData.rain.value}
                     unit={sensorData.rain.unit}
                     icon={sensorData.rain.icon}
@@ -477,11 +536,17 @@ export default function Dashboard() {
                           key={article.id}
                           className="flex space-x-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
                         >
+<<<<<<< HEAD
                           <Image
                             src={article.image || "/placeholder.svg"}
                             alt={article.title}
                             width={80}
                             height={80}
+=======
+                          <img
+                            src={article.image || "/placeholder.svg"}
+                            alt={article.title}
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
                             className="w-20 h-20 object-cover rounded-lg flex-shrink-0"
                           />
                           <div className="flex-1 min-w-0">
@@ -725,7 +790,11 @@ export default function Dashboard() {
 
           {/* Footer */}
           <footer className="border-t border-gray-200 px-6 py-4 bg-white">
+<<<<<<< HEAD
             <p className="text-sm text-gray-500 text-center">Copyright 2025 Atamagri. All rights reserved.</p>
+=======
+            <p className="text-sm text-gray-500 text-center">Copyright © 2025 Atamagri. All rights reserved.</p>
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
           </footer>
         </SidebarInset>
       </div>

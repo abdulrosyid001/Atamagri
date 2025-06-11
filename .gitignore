@@ -39,6 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+<<<<<<< HEAD
 
 # ---------------- Python / Backend ----------------
 # Byte-compiled / optimized / DLL files
@@ -86,3 +87,5 @@ ehthumbs.db
 *.swp
 *.swo
 # ---------------- End Python ----------------
+=======
+>>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
