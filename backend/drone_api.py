@@ -18,7 +18,7 @@ import io
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import cv2
 import numpy as np
@@ -26,11 +26,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from PIL import Image
 import sys
+import asyncio
+from queue import Queue
+import base64
+import traceback
 
 try:
     from djitellopy import Tello  # Optional – only required for drone mode
@@ -41,12 +45,11 @@ except ImportError:  # pragma: no cover
 # Model setup ----------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
-MODEL_PATH = Path(__file__).resolve().parent.parent / "model/plant-disease-model-complete (1).pth"
+MODEL_PATH = Path(__file__).parent / "model" / "plant-disease-model-complete (1).pth"
 if not MODEL_PATH.exists():
     # fallback path in case space gets replaced or moved
-    MODEL_PATH = Path(__file__).resolve().parent.parent / "model/plant-disease-model-complete.pth"
+    MODEL_PATH = Path(__file__).parent / "model" / "plant-disease-model-complete.pth"
 
-# The class list must match the one used during model training
 CLASSES = [
     "Tomato__Late_blight",
     "Tomato_healthy",
@@ -86,6 +89,18 @@ CLASSES = [
     "Tomato__Spider_mites Two-spotted_spider_mite",
     "Pepper,bell_Bacterial_spot",
     "Corn(maize)___healthy",
+    "Rice_healthy",
+    "Rice_Bacterial_leaf_blight",
+    "Rice_Brown_spot",
+    "Rice_Leaf_smut",
+    "Wheat_healthy",
+    "Wheat_Leaf_rust",
+    "Wheat_Stem_rust",
+    "Wheat_Yellow_rust",
+    "Cotton_healthy",
+    "Cotton_Bacterial_blight",
+    "Cotton_Leaf_curl_virus",
+    "Cotton_Leaf_spot"
 ]
 
 # --------------------------- Model architecture ---------------------------
@@ -117,44 +132,52 @@ class ImageClassificationBase(nn.Module):
         return {"val_loss": epoch_loss, "val_accuracy": epoch_acc}
 
 
-class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, pool=False):
-        super().__init__()
-        layers = [
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-        ]
-        if pool:
-            layers.append(nn.MaxPool2d(4))
-        self.block = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.block(x)
+def ConvBlock(in_channels, out_channels, pool=False):
+    layers = [nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+             nn.BatchNorm2d(out_channels),
+             nn.ReLU(inplace=True)]
+    if pool:
+        layers.append(nn.MaxPool2d(2))  # Keep 2x2 pooling
+    return nn.Sequential(*layers)
 
 
 class ResNet9(ImageClassificationBase):
-    def __init__(self, in_channels, num_classes):
+    def __init__(self, in_channels, num_diseases):
         super().__init__()
+        
+        # Initial convolution
         self.conv1 = ConvBlock(in_channels, 64)
+        
+        # First residual block
         self.conv2 = ConvBlock(64, 128, pool=True)
         self.res1 = nn.Sequential(ConvBlock(128, 128), ConvBlock(128, 128))
+        
+        # Second residual block
         self.conv3 = ConvBlock(128, 256, pool=True)
         self.conv4 = ConvBlock(256, 512, pool=True)
         self.res2 = nn.Sequential(ConvBlock(512, 512), ConvBlock(512, 512))
+        
+        # Classifier with adaptive pooling
         self.classifier = nn.Sequential(
-            nn.MaxPool2d(4),
+            nn.AdaptiveAvgPool2d((1, 1)),  # This will handle any input size
             nn.Flatten(),
-            nn.Linear(512, num_classes),
+            nn.Linear(512, num_diseases)
         )
-
+        
     def forward(self, xb):
+        # Initial convolution
         out = self.conv1(xb)
+        
+        # First residual block
         out = self.conv2(out)
         out = self.res1(out) + out
+        
+        # Second residual block
         out = self.conv3(out)
         out = self.conv4(out)
         out = self.res2(out) + out
+        
+        # Classification
         out = self.classifier(out)
         return out
 
@@ -173,12 +196,25 @@ setattr(sys.modules["__main__"], "ResNet9", ResNet9)
 TRANSFORM = transforms.Compose([transforms.ToTensor()])
 
 
-def preprocess_image(frame: np.ndarray) -> torch.Tensor:
-    """Convert OpenCV BGR frame to a model-ready tensor."""
+def preprocess_image(frame, device):
+    # Convert to RGB
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    # Resize to a larger size first
     frame_resized = cv2.resize(frame_rgb, (256, 256))
-    pil_img = Image.fromarray(frame_resized)
-    return TRANSFORM(pil_img).unsqueeze(0)  # (1, 3, 256, 256)
+    
+    # Convert to tensor and normalize
+    frame_tensor = torch.from_numpy(frame_resized).float()
+    frame_tensor = frame_tensor.permute(2, 0, 1)  # Change from HWC to CHW
+    frame_tensor = frame_tensor / 255.0  # Normalize to [0, 1]
+    
+    # Add batch dimension
+    frame_tensor = frame_tensor.unsqueeze(0)
+    
+    # Move to the same device as the model
+    frame_tensor = frame_tensor.to(device)
+    
+    return frame_tensor
 
 
 # ---------------------------------------------------------------------------
@@ -192,123 +228,155 @@ class Detector:
     def __init__(self, source: str = "webcam") -> None:
         self.source = source  # 'webcam' or 'tello'
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {self.device}")
 
-        # The standalone drone.py file already contains the model definition –
-        # copy just enough to load the model *via* torch.load without relying on
-        # the original globals.
-        try:
-            loaded = torch.load(MODEL_PATH, map_location=self.device)
-            if isinstance(loaded, nn.Module):
-                self.model = loaded
-            else:
-                # assume state_dict-like
-                state_dict = loaded["state_dict"] if "state_dict" in loaded else loaded
-                self.model = ResNet9(3, len(CLASSES))
-                self.model.load_state_dict(state_dict)
-        except Exception as e:
-            print(f"Failed to load model: {e}")
-            # final fallback: instantiate fresh model (will output random)
-            self.model = ResNet9(3, len(CLASSES))
-        self.model.eval()
-
-        # Runtime state
-        self.running: bool = False
-        self.thread: Optional[threading.Thread] = None
-        self.last_frame: Optional[np.ndarray] = None
-        self.last_prediction: Optional[str] = None
-
-        # Video capture objects
-        self.cap: Optional[cv2.VideoCapture] = None
-        self.tello = None
-
-    # ---------------------------------------------------------------------
-    # Video helpers -------------------------------------------------------
-    # ---------------------------------------------------------------------
-
-    def _open_source(self) -> bool:
-        if self.source == "webcam":
-            self.cap = cv2.VideoCapture(0)
-            return self.cap.isOpened()
-        elif self.source == "tello":
-            if Tello is None:
-                print("djitellopy not installed; falling back to webcam")
-                return False
+        # Try to initialize Tello if requested, fall back to webcam if it fails
+        if source == "tello":
             try:
                 self.tello = Tello()
                 self.tello.connect()
                 self.tello.streamon()
-                return True
-            except Exception as exc:  # pragma: no cover
-                print(f"Failed to init Tello: {exc}")
-                return False
-        return False
-
-    def _read_frame(self) -> Optional[np.ndarray]:
-        if self.cap is not None:
-            ret, frame = self.cap.read()
-            return frame if ret else None
-        if self.tello is not None:
-            frame = self.tello.get_frame_read().frame
-            return frame if frame is not None and frame.size > 0 else None
-        return None
-
-    def _close_source(self) -> None:
-        if self.cap is not None:
-            self.cap.release()
-            self.cap = None
-        if self.tello is not None:
-            try:
-                self.tello.streamoff()
-                self.tello.end()
-            except Exception:  # pragma: no cover
-                pass
+                print("Successfully connected to Tello drone")
+            except Exception as e:
+                print(f"Failed to connect to Tello drone: {e}")
+                print("Falling back to webcam")
+                self.source = "webcam"
+                self.tello = None
+        else:
             self.tello = None
 
-    # ---------------------------------------------------------------------
-    # Prediction loop -----------------------------------------------------
-    # ---------------------------------------------------------------------
+        # Initialize webcam if needed
+        if self.source == "webcam":
+            print("Initializing webcam...")
+            self.cap = cv2.VideoCapture(0)
+            if not self.cap.isOpened():
+                raise RuntimeError("Failed to open webcam")
+            print("Webcam opened successfully")
+            
+            # Set webcam properties
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            
+            # Test webcam
+            ret, frame = self.cap.read()
+            if not ret or frame is None:
+                raise RuntimeError("Failed to read from webcam")
+            print(f"Webcam test successful! Frame shape: {frame.shape}")
 
-    def _loop(self) -> None:  # noqa: D401 – simple descriptor
-        if not self._open_source():
-            print("Could not open video source – detector aborting")
-            self.running = False
+        # Load model checkpoint (handles both full model pickles and state_dicts)
+        try:
+            # Allow ResNet9 global for safe unpickling
+            import torch.serialization as _ts
+            _ts.add_safe_globals([ResNet9])
+
+            ckpt = torch.load(
+                MODEL_PATH,
+                map_location=self.device,
+                weights_only=False,  # allow full object
+            )
+
+            if isinstance(ckpt, ResNet9):
+                # File already contains full model
+                self.model = ckpt
+            else:
+                # Assume state-dict‐like structure
+                state_dict = ckpt.get("state_dict", ckpt)
+                self.model = ResNet9(3, len(CLASSES))
+                self.model.load_state_dict(state_dict)
+
+            self.model.to(self.device)
+            self.model.eval()
+            print("Model loaded successfully on", self.device)
+        except Exception as e:
+            print(f"Failed to load model checkpoint: {e}")
+            raise
+
+        # Initialize state
+        self.running = False
+        self.thread = None
+        self.last_frame = None
+        self.last_prediction = None
+
+    def _read_frame(self) -> Optional[np.ndarray]:
+        """Read a frame from the current source."""
+        try:
+            if self.source == "tello" and self.tello:
+                frame = self.tello.get_frame_read().frame
+                if frame is not None:
+                    return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            elif self.source == "webcam" and self.cap:
+                ret, frame = self.cap.read()
+                if ret and frame is not None:
+                    return frame
+        except Exception as e:
+            print(f"Error reading frame: {e}")
+        return None
+
+    def start(self) -> None:
+        """Start the detection loop in a background thread."""
+        if self.running:
             return
+        self.running = True
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        """Stop the detection loop and clean up resources."""
+        self.running = False
+        if self.thread is not None:
+            self.thread.join()
+        if self.source == "tello" and self.tello is not None:
+            self.tello.streamoff()
+            self.tello.end()
+        elif self.source == "webcam":
+            self.cap.release()
+
+    def _loop(self) -> None:
+        """Main detection loop (runs in background thread)."""
+        print("Starting detection loop (thread)")
         try:
             while self.running:
                 frame = self._read_frame()
                 if frame is None:
-                    time.sleep(0.01)
+                    # No frame captured, wait briefly
+                    time.sleep(0.1)
                     continue
 
+                # Store frame
                 self.last_frame = frame
+                # Debug: print frame shape occasionally
+                # print(f"Frame captured: {frame.shape}")
+
+                # Run prediction
                 with torch.no_grad():
-                    tensor = preprocess_image(frame).to(self.device)
-                    outputs = self.model(tensor)
-                    _, pred = torch.max(outputs, 1)
-                    self.last_prediction = CLASSES[pred.item()]
-                # Keep FPS reasonable when using CPU
-                time.sleep(0.05)
+                    # Preprocess frame
+                    frame_tensor = preprocess_image(frame, self.device)
+
+                    # Get prediction
+                    outputs = self.model(frame_tensor)
+                    probabilities = torch.nn.functional.softmax(outputs, dim=1)
+                    confidence, predicted = torch.max(probabilities, 1)
+
+                    prediction = {
+                        "class": CLASSES[predicted.item()],
+                        "confidence": confidence.item(),
+                    }
+
+                    self.last_prediction = prediction
+
+                # Prediction loop rate ~10 Hz
+                time.sleep(0.1)
+
+        except Exception as e:
+            print(f"Error in detection loop: {e}")
+            traceback.print_exc()
         finally:
-            self._close_source()
-
-    # ---------------------------------------------------------------------
-    # Public control methods ---------------------------------------------
-    # ---------------------------------------------------------------------
-
-    def start(self) -> bool:
-        if self.running:
-            return True
-        self.running = True
-        self.thread = threading.Thread(target=self._loop, daemon=True)
-        self.thread.start()
-        return True
-
-    def stop(self) -> None:
-        self.running = False
-        if self.thread:
-            self.thread.join(timeout=2)
-            self.thread = None
-        self._close_source()
+            # Cleanup resources
+            if self.source == "tello" and self.tello is not None:
+                self.tello.streamoff()
+            elif self.source == "webcam":
+                self.cap.release()
 
 
 # ---------------------------------------------------------------------------
@@ -317,53 +385,68 @@ class Detector:
 
 app = FastAPI(title="Drone Plant Disease Detection API")
 
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://10.11.3.229:3000"],  # React frontend URLs
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# One global detector instance (created lazily on first /start call)
-_detector: Optional[Detector] = None
-
+# Global variables
+detector = None
+frame_queue = Queue(maxsize=2)
+prediction_queue = Queue(maxsize=2)
+status_queue = Queue(maxsize=2)
 
 def get_detector(source: str = "webcam") -> Detector:  # noqa: D401 – simple descriptor
-    global _detector  # noqa: PLW0603
-    if _detector is None or _detector.source != source:
-        if _detector is not None:
-            _detector.stop()
-        _detector = Detector(source=source)
-    return _detector
+    global detector  # noqa: PLW0603
+    if detector is None or detector.source != source:
+        if detector is not None:
+            detector.stop()
+        detector = Detector(source=source)
+    return detector
 
 
 @app.get("/start")
-def start_detection(source: str = Query("tello", enum=["tello", "webcam"])) -> JSONResponse:  # type: ignore[valid-type]
-    det = get_detector(source)
-    det.start()
-    return JSONResponse({"status": "running", "source": source})
+async def start_detection(source: str = "webcam"):
+    """Start the detection loop with the specified source."""
+    global detector
+    try:
+        if detector is not None:
+            detector.stop()
+        detector = Detector(source)
+        detector.start()
+        return {"status": "success", "message": f"Started detection with {source}"}
+    except Exception as e:
+        print(f"Error starting detection: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/stop")
-def stop_detection() -> JSONResponse:  # noqa: D401 – simple descriptor
-    if _detector is not None:
-        _detector.stop()
-    return JSONResponse({"status": "stopped"})
+async def stop_detection():
+    """Stop the detection loop."""
+    global detector
+    if detector is not None:
+        detector.stop()
+        detector = None
+    return {"status": "success", "message": "Stopped detection"}
 
 
 @app.get("/latest_prediction")
 def latest_prediction() -> JSONResponse:  # noqa: D401 – simple descriptor
-    if _detector is None or _detector.last_prediction is None:
+    if detector is None or detector.last_prediction is None:
         return JSONResponse({"prediction": None})
-    return JSONResponse({"prediction": _detector.last_prediction})
+    return JSONResponse({"prediction": detector.last_prediction})
 
 
 @app.get("/latest_frame")
 def latest_frame() -> Response:  # noqa: D401 – simple descriptor
-    if _detector is None or _detector.last_frame is None:
+    if detector is None or detector.last_frame is None:
         return Response(content=b"", media_type="image/jpeg", status_code=204)
     # Encode as JPEG
-    success, buf = cv2.imencode(".jpg", _detector.last_frame)
+    success, buf = cv2.imencode(".jpg", detector.last_frame)
     if not success:
         return Response(content=b"", media_type="image/jpeg", status_code=500)
     return Response(content=buf.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
@@ -373,3 +456,91 @@ def latest_frame() -> Response:  # noqa: D401 – simple descriptor
 def root() -> JSONResponse:  # noqa: D401 – simple descriptor
     """Simple health check."""
     return JSONResponse({"detail": "Drone Detection API is up"})
+
+def generate_frames():
+    """Generate video frames for streaming."""
+    print("Starting video feed generation")
+    while True:
+        try:
+            if detector is None:
+                print("No detector available, waiting...")
+                time.sleep(0.1)
+                continue
+                
+            frame = detector.last_frame
+            if frame is None:
+                print("No frame available, waiting...")
+                time.sleep(0.1)
+                continue
+                
+            print(f"Generating frame: {frame.shape}")
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ret:
+                frame_bytes = buffer.tobytes()
+                print(f"Frame encoded: {len(frame_bytes)} bytes")
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.033)  # ~30 FPS
+        except Exception as e:
+            print(f"Error generating frame: {e}")
+            traceback.print_exc()
+            time.sleep(0.1)
+
+@app.get("/video_feed")
+async def video_feed():
+    """Stream video frames."""
+    print("Video feed endpoint called")
+    return StreamingResponse(
+        generate_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time updates."""
+    await websocket.accept()
+    print("WebSocket connection accepted")
+    
+    try:
+        while True:
+            if detector is None:
+                await asyncio.sleep(0.1)
+                continue
+                
+            # Get latest prediction
+            prediction = detector.last_prediction
+            if prediction:
+                print(f"Sending prediction: {prediction}")
+                await websocket.send_json({
+                    "type": "prediction",
+                    "prediction": prediction
+                })
+            
+            # Get latest status
+            status = {
+                "connected": True,
+                "mode": detector.source,
+                "battery": 100 if detector.source == "webcam" else detector.tello.get_battery() if detector.tello else 0,
+                "signal": 100 if detector.source == "webcam" else detector.tello.get_wifi_signal_quality() if detector.tello else 0
+            }
+            await websocket.send_json({
+                "type": "status",
+                "status": status
+            })
+            
+            await asyncio.sleep(0.1)  # 10 Hz update rate
+            
+    except WebSocketDisconnect:
+        print("WebSocket client disconnected")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        traceback.print_exc()
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

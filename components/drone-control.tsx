@@ -1,307 +1,241 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { AlertCircle, Play, Square, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, RotateCcw, RotateCw } from "lucide-react"
-
-interface DroneStatus {
-  connected: boolean
-  battery: number
-  flying: boolean
-  mode: string
-  signal: number
-}
-
-interface Prediction {
-  plant: string
-  condition: string
-  confidence: number
-}
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { DroneStatus, Prediction } from "@/types/drone"
+import { useToast } from "@/components/ui/use-toast"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 
 export default function DroneControl() {
+  const [isConnected, setIsConnected] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [source, setSource] = useState<'tello' | 'webcam'>('webcam')
   const [status, setStatus] = useState<DroneStatus>({
     connected: false,
+    mode: "idle",
     battery: 0,
-    flying: false,
-    mode: "disconnected",
-    signal: 0
+    signal: 0,
   })
   const [prediction, setPrediction] = useState<Prediction | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const { toast } = useToast()
 
-  useEffect(() => {
-    // Connect to drone server
-    connectToDrone()
-    
-    // Cleanup on unmount
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
-      }
-    }
-  }, [])
-
-  const connectToDrone = async () => {
+  const connectToDevice = async (selectedSource: 'tello' | 'webcam') => {
     try {
-      const response = await fetch("http://localhost:8000/connect")
-      const data = await response.json()
+      setIsLoading(true)
+      setError(null)
       
-      if (data.success) {
-        setStatus(prev => ({ 
-          ...prev, 
-          connected: true,
-          mode: data.mode || "unknown",
-          battery: data.battery || 0,
-          signal: 100
-        }))
-        startVideoStream()
-        setError(null)
-      } else {
-        setError(data.message || "Failed to connect to device")
+      // Stop any existing connection
+      await fetch('http://localhost:8000/stop').catch(console.error)
+      
+      // Try to connect to selected source
+      const response = await fetch(`http://localhost:8000/start?source=${selectedSource}`)
+      if (!response.ok) {
+        throw new Error(`Failed to connect to ${selectedSource}`)
       }
+      
+      setIsConnected(true)
+      setSource(selectedSource)
+      setStatus((prev: DroneStatus) => ({
+        ...prev,
+        connected: true,
+        mode: selectedSource,
+        battery: 100,
+        signal: 100
+      }))
     } catch (err) {
-      setError("Error connecting to drone server")
+      console.error(`Connection error:`, err)
+      setError(`Failed to connect to ${selectedSource}`)
+      setIsConnected(false)
+      setStatus((prev: DroneStatus) => ({
+        ...prev,
+        connected: false,
+        mode: "error"
+      }))
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  const startVideoStream = () => {
-    const ws = new WebSocket("ws://localhost:8000/ws")
+  useEffect(() => {
+    // Initial connection
+    connectToDevice(source)
+
+    return () => {
+      // Cleanup on unmount
+      fetch('http://localhost:8000/stop').catch(console.error)
+    }
+  }, [source])
+
+  useEffect(() => {
+    if (!isConnected) return
+
+    // Connect to WebSocket for real-time updates
+    const ws = new WebSocket('ws://localhost:8000/ws')
     wsRef.current = ws
 
     ws.onmessage = (event) => {
-      if (event.data instanceof Blob) {
-        // Handle video frame
-        const url = URL.createObjectURL(event.data)
-        console.log("Received frame blob, size:", event.data.size)
-        
-        // Always try image first (works for both webcam and drone)
-        if (imageRef.current) {
-          // Clean up previous URL to prevent memory leaks
-          if (imageRef.current.src && imageRef.current.src.startsWith('blob:')) {
-            URL.revokeObjectURL(imageRef.current.src)
-          }
-          imageRef.current.src = url
-          console.log("Updated image element with new frame")
-        }
-        
-        // Fallback to video element if needed
-        if (!imageRef.current && videoRef.current) {
-          if (videoRef.current.src && videoRef.current.src.startsWith('blob:')) {
-            URL.revokeObjectURL(videoRef.current.src)
-          }
-          videoRef.current.src = url
-          videoRef.current.load()
-        }
-      } else {
-        // Handle prediction data
-        try {
-          const prediction = JSON.parse(event.data)
-          setPrediction(prediction)
-        } catch (err) {
-          console.error("Error parsing prediction:", err)
+      const data = JSON.parse(event.data)
+      if (data.type === 'status') {
+        setStatus(data.status)
+      } else if (data.type === 'prediction') {
+        setPrediction(data.prediction)
+        if (data.prediction) {
+          toast({
+            title: "New Prediction",
+            description: `${data.prediction.class} (${(data.prediction.confidence * 100).toFixed(1)}% confidence)`,
+          })
         }
       }
     }
 
     ws.onerror = (error) => {
-      console.error("WebSocket error:", error)
-      setError("WebSocket connection error")
+      console.error('WebSocket error:', error)
+      setError('Lost connection to server')
     }
 
     ws.onclose = () => {
-      setStatus(prev => ({ ...prev, connected: false }))
-      console.log("WebSocket connection closed")
+      console.log('WebSocket connection closed')
+      setError('Connection to server closed')
     }
 
-    ws.onopen = () => {
-      console.log("WebSocket connection opened")
+    return () => {
+      ws.close()
     }
+  }, [isConnected, toast])
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Connecting to {source === 'tello' ? 'Tello drone' : 'webcam'}...</p>
+        </div>
+      </div>
+    )
   }
 
-  const sendCommand = async (command: string) => {
-    try {
-      const response = await fetch("http://localhost:8000/command", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ command }),
-      })
-      
-      const data = await response.json()
-      if (!data.success) {
-        setError(data.message)
-      }
-    } catch (err) {
-      setError("Error sending command")
-    }
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center">
+          <div className="text-red-500 mb-4">
+            <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <p className="text-red-500 font-semibold">{error}</p>
+          <p className="text-gray-600 mt-2">Please check your connection and try again</p>
+          <div className="mt-4">
+            <Select
+              value={source}
+              onValueChange={(value: 'tello' | 'webcam') => {
+                setSource(value)
+                connectToDevice(value)
+              }}
+            >
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="Select source" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="tello">Tello Drone</SelectItem>
+                <SelectItem value="webcam">Webcam</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-2">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span>Drone Control</span>
-            {status.connected && (
-              <div className="flex items-center space-x-2">
-                <div className={`w-2 h-2 rounded-full ${
-                  status.mode === "tello" ? "bg-blue-500" : "bg-green-500"
-                } animate-pulse`}></div>
-                <span className="text-sm text-gray-600">
-                  {status.mode === "tello" ? "Tello Drone" : 
-                   status.mode === "webcam" ? "Webcam Mode" : "Unknown"}
-                </span>
-              </div>
-            )}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {error && (
-            <Alert variant="destructive" className="mb-4">
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle>Error</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-          
-          {status.connected && status.mode === "webcam" && (
-            <Alert className="mb-4 border-blue-200 bg-blue-50">
-              <AlertCircle className="h-4 w-4 text-blue-600" />
-              <AlertTitle className="text-blue-800">Webcam Simulation Mode</AlertTitle>
-              <AlertDescription className="text-blue-700">
-                Tello drone not available. Using webcam for disease detection demo. 
-                Flight controls are simulated.
-              </AlertDescription>
-            </Alert>
-          )}
-          
-          <div className="grid gap-4">
-            <div className="flex justify-center gap-2">
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => sendCommand("takeoff")}
-                disabled={!status.connected || status.flying}
-              >
-                <Play className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => sendCommand("land")}
-                disabled={!status.connected || !status.flying}
-              >
-                <Square className="h-4 w-4" />
-              </Button>
+    <div className="relative h-full">
+      <div className="absolute top-4 right-4 flex items-center space-x-4">
+        <Select
+          value={source}
+          onValueChange={(value: 'tello' | 'webcam') => {
+            setSource(value)
+            connectToDevice(value)
+          }}
+        >
+          <SelectTrigger className="w-[180px] bg-black bg-opacity-50 text-white border-none">
+            <SelectValue placeholder="Select source" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="tello">Tello Drone</SelectItem>
+            <SelectItem value="webcam">Webcam</SelectItem>
+          </SelectContent>
+        </Select>
+        <div className="bg-black bg-opacity-50 text-white px-3 py-1 rounded-full text-sm">
+          {source === 'tello' ? 'Connected to Tello' : 'Using Webcam'}
+        </div>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Live Feed</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
+              {isLoading ? (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500"></div>
+                </div>
+              ) : (
+                <img
+                  src="http://localhost:8000/video_feed"
+                  alt="Drone/Webcam Feed"
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    console.error("Error loading video feed");
+                    setError("Failed to load video feed. Please check your connection.");
+                  }}
+                />
+              )}
             </div>
-            
-            <div className="grid grid-cols-3 gap-2">
-              <div />
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => sendCommand("up")}
-                disabled={!status.connected || !status.flying}
-              >
-                <ArrowUp className="h-4 w-4" />
-              </Button>
-              <div />
-              
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => sendCommand("left")}
-                disabled={!status.connected || !status.flying}
-              >
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => sendCommand("down")}
-                disabled={!status.connected || !status.flying}
-              >
-                <ArrowDown className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => sendCommand("right")}
-                disabled={!status.connected || !status.flying}
-              >
-                <ArrowRight className="h-4 w-4" />
-              </Button>
-            </div>
-            
-            <div className="flex justify-center gap-2">
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => sendCommand("rotate_ccw")}
-                disabled={!status.connected || !status.flying}
-              >
-                <RotateCcw className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => sendCommand("rotate_cw")}
-                disabled={!status.connected || !status.flying}
-              >
-                <RotateCw className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      
-      <Card>
-        <CardHeader>
-          <CardTitle>Live Feed</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="aspect-video bg-black rounded-lg overflow-hidden flex items-center justify-center">
-            {status.mode === "webcam" ? (
-              <img
-                ref={imageRef}
-                className="w-full h-full object-cover"
-                alt="Live webcam feed"
-              />
-            ) : (
-              <video
-                ref={videoRef}
-                className="w-full h-full object-cover"
-                autoPlay
-                playsInline
-                muted
-              />
-            )}
-            {!status.connected && (
-              <div className="absolute inset-0 flex items-center justify-center text-white">
-                <div className="text-center">
-                  <div className="w-16 h-16 border-4 border-gray-600 border-t-white rounded-full animate-spin mx-auto mb-4"></div>
-                  <p>Connecting to device...</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Status</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 bg-gray-100 rounded-lg">
+                  <p className="text-sm text-gray-500">Mode</p>
+                  <p className="text-lg font-semibold">{status.mode}</p>
+                </div>
+                <div className="p-4 bg-gray-100 rounded-lg">
+                  <p className="text-sm text-gray-500">Battery</p>
+                  <p className="text-lg font-semibold">{status.battery}%</p>
                 </div>
               </div>
-            )}
-          </div>
-          
-          {prediction && (
-            <div className="mt-4 p-4 bg-muted rounded-lg">
-              <h3 className="font-semibold">Disease Detection</h3>
-              <p>Plant: {prediction.plant}</p>
-              <p>Condition: {prediction.condition}</p>
-              <p>Confidence: {prediction.confidence.toFixed(2)}%</p>
+              
+              {prediction && (
+                <div className="p-4 bg-green-50 rounded-lg">
+                  <p className="text-sm text-green-500">Latest Prediction</p>
+                  <p className="text-lg font-semibold text-green-700">
+                    {prediction.class} ({(prediction.confidence * 100).toFixed(1)}%)
+                  </p>
+                </div>
+              )}
             </div>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   )
 } 

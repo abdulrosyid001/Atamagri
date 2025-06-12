@@ -1,8 +1,7 @@
 fastapi
 uvicorn
-torch  # adjust if CUDA available
-torchvision
 pillow
 opencv-python-headless
 djitellopy  # optional, for drone mode
 python-multipart
+uvicorn[standard]

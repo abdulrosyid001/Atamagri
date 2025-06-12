@@ -6,7 +6,7 @@
 # next.js
 /.next/
 /out/
-
+/venv
 # production
 /build
 
@@ -25,3 +25,28 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# --------------------------------------------------------------------
+# Python / Backend related                                              
+# --------------------------------------------------------------------
+# Ignore Python byte-code caches
+__pycache__/
+*.py[cod]
+
+# Ignore backend virtualenv created inside repo
+backend/venv/
+
+# Ignore Jupyter notebooks checkpoints (if any)
+.ipynb_checkpoints/
+
+# --------------------------------------------------------------------
+# IDE / Editor folders                                                  
+# --------------------------------------------------------------------
+.vscode/
+.idea/
+
+# --------------------------------------------------------------------
+# macOS / Windows system files                                          
+# --------------------------------------------------------------------
+.DS_Store
+Thumbs.db
