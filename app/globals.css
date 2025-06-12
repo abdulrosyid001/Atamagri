@@ -77,11 +77,7 @@
 
 @layer base {
   * {
-<<<<<<< HEAD
-    border-color: hsl(var(--border));
-=======
     @apply border-border;
->>>>>>> 9e0c12cf6c0087bef71d83d70afd8326da0a6a21
   }
   body {
     @apply bg-background text-foreground;
